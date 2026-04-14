@@ -1,4 +1,5 @@
 import os
+import shap
 import numpy as np
 import pandas as pd
 import joblib
