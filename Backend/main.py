@@ -14,7 +14,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 scaler      = joblib.load(os.path.join(MODEL_DIR, "minmax_scaler.pkl"))
 catboost    = joblib.load(os.path.join(MODEL_DIR, "catboost_best .pkl"))
 kmeans      = joblib.load(os.path.join(MODEL_DIR, "kmeans_risk.pkl"))
-shap_exp    = joblib.load(os.path.join(MODEL_DIR, "shap_explainer.pkl"))
+shap_exp    = shap.TreeExplainer(catboost)
 
 # ── Cluster → risk label  (derived from cluster-center analysis) ─────────────
 # Cluster 1: highest social + anxiety → High Risk
