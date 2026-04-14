@@ -12,7 +12,7 @@ MODEL_DIR = os.path.join(BASE_DIR, "models")
 
 # ── Load models once at startup ──────────────────────────────────────────────
 scaler      = joblib.load(os.path.join(MODEL_DIR, "minmax_scaler.pkl"))
-catboost    = joblib.load(os.path.join(MODEL_DIR, "catboost_best .pkl"))
+catboost    = joblib.load(os.path.join(MODEL_DIR, "catboost_best.pkl"))
 kmeans      = joblib.load(os.path.join(MODEL_DIR, "kmeans_risk.pkl"))
 shap_exp    = shap.TreeExplainer(catboost)
 
