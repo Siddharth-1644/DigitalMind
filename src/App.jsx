@@ -26,7 +26,11 @@ function App() {
       })
       if (!res.ok) {
         const err = await res.json()
-        throw new Error(err.detail || 'Prediction failed')
+        const detail = err.detail
+        const msg = Array.isArray(detail)
+          ? detail.map(d => d.msg || JSON.stringify(d)).join('; ')
+          : (detail || 'Prediction failed')
+        throw new Error(msg)
       }
       const data = await res.json()
       setResult(data)

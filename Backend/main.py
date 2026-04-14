@@ -63,7 +63,7 @@ app.add_middleware(
 # ── Request schema ───────────────────────────────────────────────────────────
 class PredictRequest(BaseModel):
     screen_time_hours:  float = Field(..., ge=0, le=16)
-    social_media_hours: float = Field(..., ge=0, le=12)
+    social_media_hours: float = Field(..., ge=0, le=16)
     sleep_hours:        float = Field(..., ge=0, le=12)
     anxiety_level:      int   = Field(..., ge=0, le=10)
     mood_score:         int   = Field(..., ge=0, le=10)
@@ -80,7 +80,7 @@ def build_features(req: PredictRequest) -> pd.DataFrame:
     Exception: phq9 is passed as raw formula output (the scaler was trained on it that way).
     """
     screen_norm    = req.screen_time_hours  / 16
-    social_norm    = req.social_media_hours / 12
+    social_norm    = req.social_media_hours / 16
     sleep_norm     = req.sleep_hours        / 12
     anxiety_norm   = req.anxiety_level      / 10
     mood_norm      = req.mood_score         / 10
@@ -111,36 +111,36 @@ def build_features(req: PredictRequest) -> pd.DataFrame:
     return pd.DataFrame([row], columns=list(scaler.feature_names_in_))
 
 
-def _psych_adjusted_prob(raw_p: float, mood: int, anxiety: int, focus: int) -> float:
+def _adjusted_prob(raw_p: float, mood: int, anxiety: int, focus: int,
+                   screen_hours: float, social_hours: float, sleep_hours: float,
+                   notification_count: int, num_app_switches: int) -> float:
     """
-    The CatBoost model's raw output is non-monotonic in psych inputs (anxiety,
-    mood, focus contribute only ~5% feature importance so the model surface
-    has local inversions). Fixing this requires overriding the model's psych
-    signal entirely rather than adding a small delta on top.
+    Blend five signals so that ALL inputs contribute monotonically:
 
-    Strategy: compute a psych-only probability (ps_prob) that is strictly
-    monotonic by construction, then blend it with raw_p at a weight high
-    enough that the blend is also strictly monotonic in psych inputs.
-
-    ps_prob: pure function of mood/anxiety/focus, range [0, 1]
-      - anxiety alone spans 0→1 over [0..10]  (weight 0.5)
-      - mood    alone spans 1→0 over [0..10]  (weight 0.3)
-      - focus   alone spans 1→0 over [0..10]  (weight 0.2)
-
-    blend weight α=0.75: psych inputs control 75% of the final score.
-    The raw model's worst measured inversion in psych inputs is ~10pp;
-    at α=0.75 the ps_prob per-step contribution (≥4.5pp) always exceeds
-    the residual raw inversion ((1-α)*10 = 2.5pp), guaranteeing monotonicity
-    across all inputs. The dominant screen/sleep/social signal from raw_p
-    still drives the remaining 25% of the score.
+    1. raw_p      — CatBoost output (0.15)
+    2. psych      — anxiety/mood/focus signal (0.32)
+    3. behav      — screen/social load with saturation amplifier (0.28)
+    4. sleep_dep  — sleep deprivation penalty, 0h→1.0, 8h+→0.0 (0.15)
+    5. engage     — compulsive engagement: notifications + app switches (0.10)
     """
-    ps_prob = (
+    psych_prob = (
         0.5 * (anxiety / 10) +
         0.3 * (1.0 - mood   / 10) +
         0.2 * (1.0 - focus  / 10)
     )
-    alpha = 0.75
-    combined = (1 - alpha) * raw_p + alpha * ps_prob
+
+    screen_norm = screen_hours / 16
+    social_norm = social_hours / 16
+    saturation  = (social_hours / screen_hours) if screen_hours > 0 else 0
+    behav       = min(1.0, 0.55 * screen_norm + 0.45 * social_norm * (1 + saturation))
+
+    sleep_dep = max(0.0, (8.0 - sleep_hours) / 8.0)
+
+    # notifications + app switches both reflect compulsive checking behaviour
+    engage = 0.5 * (notification_count / 500) + 0.5 * (num_app_switches / 300)
+
+    combined = (0.15 * raw_p + 0.32 * psych_prob + 0.28 * behav
+                + 0.15 * sleep_dep + 0.10 * engage)
     return max(0.0, min(1.0, combined))
 
 
@@ -152,7 +152,9 @@ def predict(req: PredictRequest):
         scaled = scaler.transform(df)
 
         raw_prob    = float(catboost.predict_proba(scaled)[0][1])
-        probability = _psych_adjusted_prob(raw_prob, req.mood_score, req.anxiety_level, req.focus_score)
+        probability = _adjusted_prob(raw_prob, req.mood_score, req.anxiety_level, req.focus_score,
+                                     req.screen_time_hours, req.social_media_hours, req.sleep_hours,
+                                     req.notification_count, req.num_app_switches)
 
         cluster_id   = int(kmeans.predict(scaled)[0])
         risk_level   = CLUSTER_RISK[cluster_id]
